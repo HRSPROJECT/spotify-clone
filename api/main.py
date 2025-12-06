@@ -214,61 +214,16 @@ async def search_all(
 
 # ============ Streaming ============
 
-# Piped API instances (fallback list)
-PIPED_INSTANCES = [
-    "https://pipedapi.kavin.rocks",
-    "https://pipedapi.adminforge.de",
-    "https://api.piped.yt",
-    "https://pipedapi.in.projectsegfau.lt",
-]
-
 @app.get("/stream/{video_id}")
 async def get_stream_url(video_id: str):
-    """Get audio stream URL for playback using Piped API"""
+    """Get audio stream URL for playback"""
     cache_key = f"stream:{video_id}"
     
     if cache_key in stream_cache:
         return stream_cache[cache_key]
     
-    # Try each Piped instance until one works
-    for piped_url in PIPED_INSTANCES:
-        try:
-            async with httpx.AsyncClient(timeout=30) as client:
-                response = await client.get(f"{piped_url}/streams/{video_id}")
-                
-                if response.status_code == 200:
-                    data = response.json()
-                    
-                    # Get audio streams
-                    audio_streams = data.get('audioStreams', [])
-                    if not audio_streams:
-                        continue
-                    
-                    # Sort by bitrate (quality) - highest first
-                    audio_streams.sort(key=lambda x: x.get('bitrate', 0), reverse=True)
-                    best_audio = audio_streams[0]
-                    
-                    result = {
-                        "videoId": video_id,
-                        "streamUrl": best_audio.get('url'),
-                        "duration": data.get('duration', 0),
-                        "title": data.get('title', ''),
-                        "thumbnail": data.get('thumbnailUrl', ''),
-                        "format": best_audio.get('format', 'webm'),
-                        "bitrate": best_audio.get('bitrate', 128) // 1000,  # Convert to kbps
-                        "quality": best_audio.get('quality', 'unknown')
-                    }
-                    
-                    stream_cache[cache_key] = result
-                    return result
-                    
-        except Exception as e:
-            print(f"Piped instance {piped_url} failed: {e}")
-            continue
-    
-    # Fallback: Try yt-dlp with more aggressive settings
     try:
-        url = f'https://music.youtube.com/watch?v={video_id}'
+        url = f'https://www.youtube.com/watch?v={video_id}'
         
         ydl_opts = {
             'format': 'bestaudio[ext=m4a]/bestaudio/best',
@@ -278,11 +233,16 @@ async def get_stream_url(video_id: str):
             'skip_download': True,
             'extractor_args': {
                 'youtube': {
-                    'player_client': ['android_music', 'android', 'ios'],
-                    'player_skip': ['webpage', 'configs', 'js'],
+                    'player_client': ['android_music', 'android', 'ios', 'web'],
                 }
             },
         }
+        
+        # Add cookies file if exists
+        cookies_path = os.path.join(os.path.dirname(__file__), 'cookies.txt')
+        if os.path.exists(cookies_path):
+            ydl_opts['cookiefile'] = cookies_path
+            print("Using cookies.txt for authentication")
         
         def extract():
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -290,31 +250,37 @@ async def get_stream_url(video_id: str):
         
         info = await run_sync(extract)
         
-        if info:
-            formats = info.get('formats', [])
-            audio_formats = [f for f in formats if f.get('acodec') != 'none' and f.get('vcodec') == 'none']
-            
-            if audio_formats:
-                audio_formats.sort(key=lambda x: x.get('abr', 0) or 0, reverse=True)
-                best = audio_formats[0]
-                
-                result = {
-                    "videoId": video_id,
-                    "streamUrl": best.get('url'),
-                    "duration": info.get('duration', 0),
-                    "title": info.get('title', ''),
-                    "thumbnail": info.get('thumbnail', ''),
-                    "format": best.get('ext', 'webm'),
-                    "bitrate": best.get('abr', 128)
-                }
-                
-                stream_cache[cache_key] = result
-                return result
-                
+        if not info:
+            raise HTTPException(404, "Song not found")
+        
+        # Find best audio format
+        formats = info.get('formats', [])
+        audio_formats = [f for f in formats if f.get('acodec') != 'none']
+        
+        if not audio_formats:
+            raise HTTPException(404, "No audio available")
+        
+        # Sort by quality
+        audio_formats.sort(key=lambda x: x.get('abr', 0) or 0, reverse=True)
+        best = audio_formats[0]
+        
+        result = {
+            "videoId": video_id,
+            "streamUrl": best.get('url'),
+            "duration": info.get('duration', 0),
+            "title": info.get('title', ''),
+            "thumbnail": info.get('thumbnail', ''),
+            "format": best.get('ext', 'webm'),
+            "bitrate": best.get('abr', 128)
+        }
+        
+        stream_cache[cache_key] = result
+        return result
+        
+    except HTTPException:
+        raise
     except Exception as e:
-        print(f"yt-dlp fallback failed: {e}")
-    
-    raise HTTPException(500, "Unable to get stream URL. Please try again later.")
+        raise HTTPException(500, f"Stream failed: {str(e)}")
 
 
 @app.get("/play/{video_id}")

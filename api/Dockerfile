@@ -13,8 +13,9 @@ COPY requirements.txt .
 # Install dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application
+# Copy application and cookies
 COPY main.py .
+COPY cookies.txt .
 
 # Expose port
 EXPOSE 8080
