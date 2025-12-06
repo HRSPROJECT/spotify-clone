@@ -3,6 +3,8 @@ services:
     name: spotify-clone-api
     runtime: python
     plan: free
+    repo: https://github.com/HRSPROJECT/spotify-clone
+    rootDir: api
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
     envVars:
